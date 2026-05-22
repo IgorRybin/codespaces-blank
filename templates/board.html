@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="ru" class="h-full bg-slate-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Доска Kanban Team Board</title>
+    <!-- Tailwind CSS Standard Playback -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- SortableJS Library for Drag and Drop -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .kanban-column-scroll {
+            max-height: calc(100vh - 14rem);
+        }
+    </style>
+    <script>
+        // 1. Extract and persist token from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        let token = urlParams.get('token');
+        if (token) {
+            localStorage.setItem('kanban_token', token);
+        } else {
+            token = localStorage.getItem('kanban_token');
+        }
+
+        // 2. If no token found anywhere and we are not logging out, redirect to login
+        if (!token && !window.location.pathname.startsWith('/auth/')) {
+            window.location.href = "/auth/login?next=" + encodeURIComponent(window.location.pathname + window.location.search);
+        }
+
+        // 3. Keep token on all local links during user interactions
+        document.addEventListener('click', function(e) {
+            const anchor = e.target.closest('a');
+            if (anchor) {
+                const href = anchor.getAttribute('href');
+                if (href && href.startsWith('/') && !href.startsWith('/auth/logout')) {
+                    const localToken = localStorage.getItem('kanban_token');
+                    if (localToken) {
+                        e.preventDefault();
+                        const url = new URL(href, window.location.origin);
+                        url.searchParams.set('token', localToken);
+                        window.location.href = url.pathname + url.search + url.hash;
+                    }
+                }
+            }
+        });
+
+        // 4. Inject token to all local forms on submission
+        document.addEventListener('submit', function(e) {
+            const form = e.target;
+            const action = form.getAttribute('action') || window.location.pathname;
+            if (action && action.startsWith('/') && !action.startsWith('/auth/login') && !action.startsWith('/auth/logout')) {
+                const localToken = localStorage.getItem('kanban_token');
+                if (localToken) {
+                    const url = new URL(action, window.location.origin);
+                    url.searchParams.set('token', localToken);
+                    form.setAttribute('action', url.pathname + url.search + url.hash);
+                }
+            }
+        });
+
+        // 5. Intercept window.fetch to automatically include the token query parameter
+        (function() {
+            const originalFetch = window.fetch;
+            window.fetch = function(input, init) {
+                let url = typeof input === 'string' ? input : (input && input.url);
+                if (url && url.startsWith('/') && !url.startsWith('/auth/')) {
+                    const localToken = localStorage.getItem('kanban_token');
+                    if (localToken) {
+                        const connector = url.includes('?') ? '&' : '?';
+                        url = url + connector + 'token=' + encodeURIComponent(localToken);
+                        if (typeof input === 'string') {
+                            input = url;
+                        } else if (input && typeof input === 'object') {
+                            input = new Request(url, input);
+                        }
+                    }
+                }
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
+</head>
+<body class="h-full flex flex-col overflow-hidden text-slate-800">
+
+    <!-- Macro definitions for Jinja Cards -->
+    {% macro render_task_card(task) %}
+    <div class="bg-white hover:bg-slate-50/50 hover:border-slate-300 border border-slate-200/90 rounded-xl p-3.5 shadow-3xs cursor-grab active:cursor-grabbing hover:shadow-2xs transition-all duration-150 flex flex-col space-y-3" 
+         id="task-card-{{ task.id }}" 
+         data-task-id="{{ task.id }}" 
+         onclick="openTaskDetails({{ task.id }})">
+        
+        <!-- Priority badge and comments count -->
+        <div class="flex items-center justify-between">
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wide
+                {% if task.priority == 'high' %} bg-rose-50 text-rose-700 border border-rose-200
+                {% elif task.priority == 'medium' %} bg-amber-50 text-amber-700 border border-amber-200
+                {% else %} bg-slate-50 text-slate-600 border border-slate-200 {% endif %}">
+                {% if task.priority == 'high' %} Выс {% elif task.priority == 'medium' %} Срд {% else %} Низ {% endif %}
+            </span>
+            
+            <div class="flex items-center gap-2 text-slate-400">
+                {% if task.comments %}
+                <span class="text-[10px] text-slate-400 font-bold inline-flex items-center gap-0.5" title="Комментарии: {{ task.comments|length }}">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a3 3 0 11-5.999 0 3 3 0 015.999 0zm10.312 0a3 3 0 11-5.999 0 3 3 0 015.999 0zM3.75 6.115a3.75 3.75 0 016.75 0 3.75 3.75 0 016.75 0a3.75 3.75 0 016.75 0v3.47m-19.25 0h19.25" />
+                    </svg>
+                    {{ task.comments|length }}
+                </span>
+                {% endif %}
+                <span class="text-[10px] font-mono tracking-tight text-slate-400 font-bold">#{{ task.id }}</span>
+            </div>
+        </div>
+
+        <!-- Task Title -->
+        <h4 class="text-sm font-semibold text-slate-800 leading-snug break-words">
+            {{ task.title }}
+        </h4>
+
+        <!-- Short Description preview if exists -->
+        {% if task.description %}
+        <p class="text-[11px] text-slate-400 leading-relaxed max-h-12 overflow-hidden text-ellipsis line-clamp-2">
+            {{ task.description }}
+        </p>
+        {% endif %}
+
+        <div class="flex items-center justify-between border-t border-slate-100 pt-3 mt-1 shrink-0">
+            <!-- Due Date Badge -->
+            <div class="text-[10px] font-semibold flex items-center gap-1.5
+                {% if task.due_date %}
+                    {% if task.status != 'completed' %}
+                        <!-- Red if overdue -->
+                        {% set is_past = task.due_date < today_str %}
+                        {% if is_past %} text-rose-600 {% else %} text-slate-400 {% endif %}
+                    {% else %}
+                        text-slate-400
+                    {% endif %}
+                    " title="Срок выполнения"
+                {% else %}
+                    text-slate-350"
+                {% endif %}>
+                
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+                </svg>
+                <span>{{ task.due_date or 'Срок не задан' }}</span>
+            </div>
+
+            <!-- Assingee circle avatar -->
+            {% if task.assignee %}
+            <div class="h-6 w-6 rounded-full bg-{{ task.assignee.color }}-600 text-white flex items-center justify-center font-bold text-[9px] border border-white shrink-0 shadow-3xs" 
+                 title="Исполнитель: {{ task.assignee.full_name }}">
+                {{ task.assignee.full_name[:2] }}
+            </div>
+            {% else %}
+            <div class="h-6 w-6 rounded-full bg-slate-100 border border-slate-200/60 text-slate-400 flex items-center justify-center font-semibold text-[8px] shrink-0" 
+                 title="Исполнитель не назначен">
+                --
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endmacro %}
+
+    <!-- Top Navigation Header -->
+    <header class="bg-white border-b border-slate-200 shrink-0 sticky top-0 z-30 shadow-xs">
+        <div class="mx-auto px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            
+            <!-- Logo & Brand Header -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="h-9 w-9 flex items-center justify-center rounded-lg bg-indigo-600 text-white shadow-xs">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-extrabold tracking-tight text-slate-900 leading-none">Kanban Board</h1>
+                        <span class="text-[10px] text-slate-400 font-medium font-mono">ЛОКАЛЬНОЕ ОБЛАКО ОФИСА</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Global Action Triggers -->
+            <div class="flex items-center flex-wrap gap-2.5">
+                <!-- Search & Filters -->
+                <form action="/" method="GET" class="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-1.5 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-600 transition-all text-sm w-full md:w-auto">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4 text-slate-400 mr-2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input type="text" name="q" value="{{ q }}" placeholder="Поиск задач..." class="bg-transparent focus:outline-none placeholder-slate-400 text-sm text-slate-800 w-full md:w-48">
+                    
+                    <!-- Submit implicit button when pressing enter -->
+                    <input type="submit" class="hidden">
+                    
+                    <!-- Carry other filter variables over -->
+                    <input type="hidden" name="assignee_id" value="{{ assignee_id }}">
+                    <input type="hidden" name="priority" value="{{ priority }}">
+                    <input type="hidden" name="sort_by" value="{{ sort_by }}">
+                </form>
+
+                <button onclick="openCreateModal()" class="px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs shadow-indigo-100 transition-all cursor-pointer">
+                    + Новая задача
+                </button>
+
+                <a href="/tasks/action/export-excel" class="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5 text-slate-500">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    Экспорт Excel
+                </a>
+
+                <a href="/admin" class="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-3.5 h-3.5 text-slate-500">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Админ панель
+                </a>
+
+                <!-- User profile session badge -->
+                <div class="h-8 border-l border-slate-200 mx-1 hidden sm:block"></div>
+
+                <div class="flex items-center space-x-2.5 pl-1.5">
+                    <div class="h-8 w-8 rounded-full bg-{{ current_user.color }}-600 text-white flex items-center justify-center font-bold text-xs shadow-xs" title="{{ current_user.full_name }}">
+                        {{ current_user.full_name[:2] }}
+                    </div>
+                    <div class="hidden lg:block text-left">
+                        <div class="text-xs font-semibold leading-none">{{ current_user.full_name }}</div>
+                        <a href="/auth/logout" class="text-[10px] text-rose-500 hover:text-rose-600 font-medium hover:underline">Выйти</a>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </header>
+
+    <!-- Filter toolbar and search filters -->
+    <section class="bg-white border-b border-slate-200 shrink-0 px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 z-20 shadow-2xs">
+        <div class="flex flex-wrap items-center gap-3">
+            
+            <!-- Assignee Filter dropdown -->
+            <div class="flex items-center space-x-1.5">
+                <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Исполнитель:</span>
+                <select onchange="applyFilter('assignee_id', this.value)" class="bg-slate-100 hover:bg-slate-200/80 text-xs px-2.5 py-1.5 rounded-lg border-0 outline-none font-medium text-slate-700 cursor-pointer">
+                    <option value="all" {% if assignee_id == 'all' %} selected {% endif %}>Все</option>
+                    <option value="none" {% if assignee_id == 'none' %} selected {% endif %}>Не назначены</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}" {% if assignee_id == u.id|string %} selected {% endif %}>{{ u.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Priority Filter dropdown -->
+            <div class="flex items-center space-x-1.5">
+                <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Приоритет:</span>
+                <select onchange="applyFilter('priority', this.value)" class="bg-slate-100 hover:bg-slate-200/80 text-xs px-2.5 py-1.5 rounded-lg border-0 outline-none font-medium text-slate-700 cursor-pointer">
+                    <option value="all" {% if priority == 'all' %} selected {% endif %}>Все</option>
+                    <option value="low" {% if priority == 'low' %} selected {% endif %}>Низкий</option>
+                    <option value="medium" {% if priority == 'medium' %} selected {% endif %}>Средний</option>
+                    <option value="high" {% if priority == 'high' %} selected {% endif %}>Высокий</option>
+                </select>
+            </div>
+
+            <!-- Sorting selector -->
+            <div class="flex items-center space-x-1.5">
+                <span class="text-xs text-slate-400 font-semibold uppercase tracking-wider">Сортировка:</span>
+                <select onchange="applyFilter('sort_by', this.value)" class="bg-slate-100 hover:bg-slate-200/80 text-xs px-2.5 py-1.5 rounded-lg border-0 outline-none font-medium text-slate-700 cursor-pointer">
+                    <option value="created_desc" {% if sort_by == 'created_desc' %} selected {% endif %}>По дате создания (нов. первые)</option>
+                    <option value="created_asc" {% if sort_by == 'created_asc' %} selected {% endif %}>По дате создания (стар. первые)</option>
+                    <option value="due_asc" {% if sort_by == 'due_asc' %} selected {% endif %}>По сроку (первоочередные)</option>
+                    <option value="due_desc" {% if sort_by == 'due_desc' %} selected {% endif %}>По сроку (поздние)</option>
+                    <option value="priority_desc" {% if sort_by == 'priority_desc' %} selected {% endif %}>По приоритету</option>
+                </select>
+            </div>
+
+            <!-- Dynamic clear alerts if any filters are set -->
+            {% if q or assignee_id != 'all' or priority != 'all' or sort_by != 'created_desc' %}
+            <a href="/" class="text-xs text-indigo-600 font-semibold hover:text-indigo-700 hover:underline inline-flex items-center gap-1 cursor-pointer">
+                Сбросить фильтры
+            </a>
+            {% endif %}
+
+        </div>
+        
+        <div class="text-xs text-slate-400 font-semibold">
+            Команда: <span class="font-bold text-slate-650">{{ users|length }} пользователей</span>
+        </div>
+    </section>
+
+    <!-- Main Kanban Board stage grid container -->
+    <main class="flex-1 overflow-x-auto p-6 bg-slate-50 min-h-0">
+        <div class="flex gap-5 h-full items-start select-none">
+            
+            <!-- Column 1: "Новая" -->
+            <div class="w-80 shrink-0 bg-slate-100/90 border border-slate-200/60 rounded-2xl flex flex-col max-h-full shadow-2xs">
+                <!-- Column Header -->
+                <div class="p-4 flex items-center justify-between border-b border-slate-200/60 shrink-0">
+                    <div class="flex items-center space-x-2">
+                        <span class="h-2 w-2 rounded-full bg-indigo-505 bg-indigo-500"></span>
+                        <h3 class="text-sm font-bold text-slate-800">Новая</h3>
+                    </div>
+                    <span class="bg-indigo-50 text-indigo-700 text-xs font-bold px-2.5 py-0.5 rounded-full font-mono shadow-3xs" id="cnt-new">{{ tasks_new|length }}</span>
+                </div>
+                <!-- Task List Drop Zone -->
+                <div class="kanban-column-scroll kanban-list-container flex-1 overflow-y-auto p-3.5 space-y-3" id="list-new" data-status="new" style="min-height: 100px;">
+                    {% for task in tasks_new %}
+                        {{ render_task_card(task) }}
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Loop Columns: Sub-Stages inside "В работе" -->
+            {% for stage in sub_stages %}
+            <div class="w-80 shrink-0 bg-slate-100/90 border border-slate-200/60 rounded-2xl flex flex-col max-h-full shadow-2xs">
+                <!-- Column Header -->
+                <div class="p-4 flex items-center justify-between border-b border-slate-200/60 shrink-0">
+                    <div class="flex items-center space-x-2">
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                        <h3 class="text-sm font-bold text-slate-800 leading-none truncate max-w-[180px]">{{ stage.name }}</h3>
+                    </div>
+                    <div class="flex items-center space-x-1.5">
+                        {% if stage.default_assignee %}
+                        <div class="h-5 w-5 rounded-full bg-{{ stage.default_assignee.color }}-600 text-white flex items-center justify-center font-bold text-[8px] border border-white" title="По умолчанию на: {{ stage.default_assignee.full_name }}">
+                            {{ stage.default_assignee.full_name[:2] }}
+                        </div>
+                        {% endif %}
+                        <span class="bg-emerald-50 text-emerald-700 text-xs font-bold px-2.5 py-0.5 rounded-full font-mono shadow-3xs" id="cnt-stage-{{ stage.id }}">{{ tasks_by_sub_stage[stage.id]|length }}</span>
+                    </div>
+                </div>
+                <!-- Task List Drop Zone -->
+                <div class="kanban-column-scroll kanban-list-container flex-1 overflow-y-auto p-3.5 space-y-3" id="list-stage-{{ stage.id }}" data-status="in_progress" data-sub-stage-id="{{ stage.id }}" style="min-height: 100px;">
+                    {% for task in tasks_by_sub_stage[stage.id] %}
+                        {{ render_task_card(task) }}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+
+            <!-- Column Last: "Завершено" -->
+            <div class="w-80 shrink-0 bg-slate-100/90 border border-slate-200/60 rounded-2xl flex flex-col max-h-full shadow-2xs">
+                <!-- Column Header -->
+                <div class="p-4 flex items-center justify-between border-b border-slate-200/60 shrink-0">
+                    <div class="flex items-center space-x-2">
+                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                        <h3 class="text-sm font-bold text-slate-800">Завершено</h3>
+                    </div>
+                    <span class="bg-rose-50 text-rose-700 text-xs font-bold px-2.5 py-0.5 rounded-full font-mono shadow-3xs" id="cnt-completed">{{ tasks_completed|length }}</span>
+                </div>
+                <!-- Task List Drop Zone -->
+                <div class="kanban-column-scroll kanban-list-container flex-1 overflow-y-auto p-3.5 space-y-3" id="list-completed" data-status="completed" style="min-height: 100px;">
+                    {% for task in tasks_completed %}
+                        {{ render_task_card(task) }}
+                    {% endfor %}
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Create Task Modal -->
+    <div id="create-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center hidden z-50 p-4 transition-all animate-fade-in">
+        <div class="bg-white rounded-2xl border border-slate-200/80 shadow-xl max-w-lg w-full overflow-hidden transform scale-95 transition-all duration-150" id="create-modal-content">
+            <div class="px-6 py-4.5 border-b border-slate-100 flex items-center justify-between">
+                <h3 class="text-md font-bold text-slate-900">Новая задача</h3>
+                <button onclick="closeCreateModal()" class="text-slate-400 hover:text-slate-600 cursor-pointer p-1 rounded-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            
+            <form action="/tasks/create" method="POST" class="p-6 space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Название задачи</label>
+                    <input type="text" name="title" required placeholder="Например: Обновить дизайн главной страницы"
+                        class="block w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none text-slate-900 font-medium transition-all text-sm">
+                </div>
+                
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Описание</label>
+                    <textarea name="description" rows="3" placeholder="Опишите техническое задание или требования..."
+                        class="block w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none text-slate-900 text-sm transition-all resize-none"></textarea>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Исполнитель</label>
+                        <select name="assignee_id"
+                            class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all cursor-pointer">
+                            <option value="none" selected>Не назначен</option>
+                            {% for user in users %}
+                            <option value="{{ user.id }}">{{ user.full_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Приоритет</label>
+                        <select name="priority"
+                            class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all cursor-pointer">
+                            <option value="low">Низкий</option>
+                            <option value="medium" selected>Средний</option>
+                            <option value="high">Высокий</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Срок выполнения</label>
+                        <input type="date" name="due_date"
+                            class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm transition-all text-slate-950 cursor-pointer">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Начальный этап</label>
+                        <select name="status" id="create-task-initial-status" onchange="toggleCreateStageSelect(this.value)"
+                            class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all cursor-pointer">
+                            <option value="new" selected>Новая (В очереди)</option>
+                            <option value="in_progress">В работе</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="create-stage-picker" class="hidden">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Этап работы</label>
+                    <select name="sub_stage_id"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all cursor-pointer">
+                        {% for stage in sub_stages %}
+                        <option value="{{ stage.id }}">{{ stage.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="flex items-center justify-end space-x-2.5 pt-4.5 border-t border-slate-100">
+                    <button type="button" onclick="closeCreateModal()"
+                        class="px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer">
+                        Отмена
+                    </button>
+                    <button type="submit"
+                        class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold hover:shadow-sm hover:shadow-indigo-100 transition-all cursor-pointer">
+                        Создать задачу
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Slide over / Task details pane -->
+    <div id="details-slideover" class="fixed inset-y-0 right-0 w-full max-w-xl bg-white shadow-2xl border-l border-slate-200 transition-all duration-300 transform translate-x-full z-40 flex flex-col">
+        <!-- Inside loaded dynamically via loading indicator or AJAX response -->
+        <div class="p-8 h-full flex flex-col justify-center items-center text-slate-400" id="details-slideover-placeholder">
+            <svg class="animate-spin h-8 w-8 text-indigo-600 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="text-xs font-medium uppercase tracking-wider">Загрузка карточки...</span>
+        </div>
+        <div id="details-slideover-content" class="h-full hidden"></div>
+    </div>
+
+    <!-- Dimmer overlay behind Slideover -->
+    <div id="slideover-backdrop" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs hidden z-35" onclick="closeTaskDetails(event)"></div>
+
+    <!-- Core Kanban JS scripts -->
+    <script>
+        // Modal management
+        function openCreateModal() {
+            const modal = document.getElementById("create-modal");
+            modal.classList.remove("hidden");
+            setTimeout(() => {
+                document.getElementById("create-modal-content").classList.remove("scale-95");
+                document.getElementById("create-modal-content").classList.add("scale-100");
+            }, 10);
+        }
+
+        function closeCreateModal() {
+            const modal = document.getElementById("create-modal");
+            document.getElementById("create-modal-content").classList.remove("scale-100");
+            document.getElementById("create-modal-content").classList.add("scale-95");
+            setTimeout(() => {
+                modal.classList.add("hidden");
+            }, 100);
+        }
+
+        function toggleCreateStageSelect(status) {
+            const stagePicker = document.getElementById("create-stage-picker");
+            if (status === "in_progress") {
+                stagePicker.classList.remove("hidden");
+            } else {
+                stagePicker.classList.add("hidden");
+            }
+        }
+
+        // Details Sideover Slide controls
+        function openTaskDetails(taskId) {
+            // Prevent interference with click triggers on nested avatars, buttons, etc.
+            const backdrop = document.getElementById("slideover-backdrop");
+            const slideover = document.getElementById("details-slideover");
+            const ph = document.getElementById("details-slideover-placeholder");
+            const content = document.getElementById("details-slideover-content");
+
+            backdrop.classList.remove("hidden");
+            slideover.classList.remove("translate-x-full");
+
+            ph.classList.remove("hidden");
+            content.classList.add("hidden");
+
+            // Fetch AJAX data of task details
+            fetch(`/tasks/${taskId}`)
+                .then(res => {
+                    if (!res.ok) throw new Error("Loading error");
+                    return res.text();
+                })
+                .then(html => {
+                    content.innerHTML = html;
+                    ph.classList.add("hidden");
+                    content.classList.remove("hidden");
+                })
+                .catch(err => {
+                    content.innerHTML = `<div class="p-8 text-rose-600 font-semibold text-center">Не удалось загрузить данные задачи. Попробуйте еще раз.</div>`;
+                    ph.classList.add("hidden");
+                    content.classList.remove("hidden");
+                });
+        }
+
+        function closeTaskDetails(event) {
+            if (event) event.stopPropagation();
+            const backdrop = document.getElementById("slideover-backdrop");
+            const slideover = document.getElementById("details-slideover");
+            
+            slideover.classList.add("translate-x-full");
+            setTimeout(() => {
+                backdrop.classList.add("hidden");
+            }, 200);
+        }
+
+        function confirmDeleteTask(id) {
+            if (confirm("Вы действительно хотите удалить эту задачу?")) {
+                fetch(`/tasks/${id}/delete`, {
+                    method: 'POST'
+                })
+                .then(res => {
+                    if (res.url) {
+                        window.location.href = res.url;
+                    } else {
+                        const localToken = localStorage.getItem('kanban_token');
+                        let nextUrl = '/';
+                        if (localToken) {
+                            nextUrl += '?token=' + encodeURIComponent(localToken);
+                        }
+                        window.location.href = nextUrl;
+                    }
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('Произошла ошибка при удалении задачи');
+                });
+            }
+        }
+
+        // Apply filters handler
+        function applyFilter(paramName, value) {
+            const url = new URL(window.location.href);
+            url.searchParams.set(paramName, value);
+            
+            // Go to url
+            window.location.href = url.toString();
+        }
+
+        // Setup Drag-And-Drop listeners with SortableJS
+        document.addEventListener("DOMContentLoaded", () => {
+            const columns = document.querySelectorAll(".kanban-list-container");
+            
+            columns.forEach(column => {
+                new Sortable(column, {
+                    group: "tasks",
+                    animation: 170,
+                    ghostClass: "bg-indigo-50/70",
+                    dragClass: "rotate-2",
+                    
+                    onEnd: function (evt) {
+                        const taskId = evt.item.getAttribute("data-task-id");
+                        const toColumn = evt.to;
+                        const status = toColumn.getAttribute("data-status");
+                        const subStageId = toColumn.getAttribute("data-sub-stage-id");
+
+                        // Block manual board updates while we send saving signals
+                        fetch(`/tasks/${taskId}/move`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                                status: status,
+                                sub_stage_id: subStageId ? parseInt(subStageId) : null
+                            })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === "success") {
+                                console.log(`[Drag] Task ${taskId} saved state.`);
+                                // Optional reload page if we want to synchronize counters or default assignees
+                                window.location.reload();
+                            } else {
+                                alert("Ошибка сохранения. Доска возвращается в исходный статус.");
+                                window.location.reload();
+                            }
+                        })
+                        .catch(err => {
+                            console.error(err);
+                            alert("Ошибка подключения к серверу.");
+                            window.location.reload();
+                        });
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

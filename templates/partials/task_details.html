@@ -1,0 +1,197 @@
+<div class="h-full flex flex-col bg-white text-slate-800" id="task-modal-content-base">
+    
+    <!-- Modal Header -->
+    <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-md uppercase tracking-wider
+                {% if task.priority == 'high' %} bg-rose-50 text-rose-700 border border-rose-200
+                {% elif task.priority == 'medium' %} bg-amber-50 text-amber-700 border border-amber-200
+                {% else %} bg-slate-50 text-slate-600 border border-slate-200 {% endif %}">
+                {% if task.priority == 'high' %} Высокий {% elif task.priority == 'medium' %} Средний {% else %} Низкий {% endif %}
+            </span>
+            <span class="text-xs text-slate-400 font-mono">ID-{{ task.id }}</span>
+        </div>
+        <button onclick="closeTaskDetails(event)" class="text-slate-400 hover:text-slate-600 cursor-pointer p-1 rounded-lg hover:bg-slate-50 transition-all">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- Content Split Layout -->
+    <div class="flex-1 overflow-y-auto p-6 space-y-8">
+        
+        <!-- Editable / View Area -->
+        <form action="/tasks/{{ task.id }}/edit" method="POST" class="space-y-6">
+            
+            <!-- Title -->
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Название задачи</label>
+                <input type="text" name="title" required value="{{ task.title }}"
+                    class="block w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none text-slate-900 font-medium transition-all text-sm">
+            </div>
+
+            <!-- Description -->
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Описание</label>
+                <textarea name="description" rows="3" placeholder="Опишите задачу подробнее..."
+                    class="block w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none text-slate-900 text-sm transition-all resize-none">{{ task.description or '' }}</textarea>
+            </div>
+
+            <!-- Parameters Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                <!-- Status & Stage -->
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Статус</label>
+                    <select id="task-edit-status" name="status" onchange="toggleSubStageSelect(this.value)"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all">
+                        <option value="new" {% if task.status == 'new' %} selected {% endif %}>Новая</option>
+                        <option value="in_progress" {% if task.status == 'in_progress' %} selected {% endif %}>В работе</option>
+                        <option value="completed" {% if task.status == 'completed' %} selected {% endif %}>Завершено</option>
+                    </select>
+                </div>
+
+                <!-- Sub-Stage in Work -->
+                <div id="sub-stage-container" class="{% if task.status != 'in_progress' %} hidden {% endif %}">
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Этап работы</label>
+                    <select name="sub_stage_id"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all">
+                        {% for stage in sub_stages %}
+                        <option value="{{ stage.id }}" {% if task.sub_stage_id == stage.id %} selected {% endif %}>{{ stage.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Assignee -->
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Исполнитель</label>
+                    <select name="assignee_id"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all">
+                        <option value="none">Не назначен</option>
+                        {% for user in users %}
+                        <option value="{{ user.id }}" {% if task.assignee_id == user.id %} selected {% endif %}>{{ user.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Priority -->
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Приоритет</label>
+                    <select name="priority"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm font-medium transition-all">
+                        <option value="low" {% if task.priority == 'low' %} selected {% endif %}>Низкий</option>
+                        <option value="medium" {% if task.priority == 'medium' %} selected {% endif %}>Средний</option>
+                        <option value="high" {% if task.priority == 'high' %} selected {% endif %}>Высокий</option>
+                    </select>
+                </div>
+
+                <!-- Due Date -->
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Срок выполнения</label>
+                    <input type="date" name="due_date" value="{{ task.due_date or '' }}"
+                        class="block w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm transition-all text-slate-950">
+                </div>
+
+                <!-- Creator metadata & Complete date -->
+                <div class="flex flex-col justify-center text-xs text-slate-500 space-y-1 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <div><strong>Создатель:</strong> {{ task.creator.full_name if task.creator else 'Неизвестно' }}</div>
+                    <div><strong>Создана:</strong> {{ task.created_at.strftime('%d.%m.%Y %H:%M') }}</div>
+                    {% if task.completed_at %}
+                    <div class="text-emerald-700"><strong>Завершена:</strong> {{ task.completed_at.strftime('%d.%m.%Y %H:%M') }}</div>
+                    {% endif %}
+                </div>
+
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center justify-between border-t border-slate-100 pt-5 mt-5">
+                <button type="submit"
+                    class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium transition-all font-semibold shadow-sm shadow-indigo-100 cursor-pointer">
+                    Сохранить изменения
+                </button>
+                <button type="button" onclick="confirmDeleteTask({{ task.id }})"
+                    class="px-4 py-2.5 border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-medium rounded-xl transition-all cursor-pointer">
+                    Удалить задачу
+                </button>
+            </div>
+        </form>
+
+        <hr class="border-t border-slate-100">
+
+        <!-- Comments Section -->
+        <div class="space-y-4">
+            <h3 class="text-sm font-bold text-slate-800 uppercase tracking-widest text-[11px] text-slate-400">Комментарии</h3>
+            
+            <!-- Comment Form -->
+            <form action="/tasks/{{ task.id }}/comments" method="POST" class="flex gap-2.5">
+                <input type="text" name="text" required placeholder="Напишите комментарий..."
+                    class="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none text-sm transition-all focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/10">
+                <button type="submit"
+                    class="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-medium cursor-pointer transition-all">
+                    Отправить
+                </button>
+            </form>
+
+            <!-- Comments Flow -->
+            <div class="space-y-3.5 pt-2 max-h-64 overflow-y-auto pr-1">
+                {% if task.comments %}
+                    {% for comment in task.comments %}
+                    <div class="bg-slate-50/80 p-3 rounded-xl border border-slate-100/60 transition-all hover:bg-slate-50">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-xs font-bold text-slate-700">{{ comment.author.full_name }}</span>
+                            <span class="text-[10px] text-slate-400 font-mono">{{ comment.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</span>
+                        </div>
+                        <p class="text-xs text-slate-600 leading-relaxed whitespace-pre-line">{{ comment.text }}</p>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="text-xs text-center text-slate-400 py-3 italic">Комментариев пока нет. Начните обсуждение!</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <hr class="border-t border-slate-100">
+
+        <!-- Task Action History -->
+        <div class="space-y-3.5">
+            <h3 class="text-sm font-bold text-slate-800 uppercase tracking-widest text-[11px] text-slate-400">История изменений</h3>
+            
+            <div class="relative pl-4 border-l border-slate-200 space-y-4 max-h-60 overflow-y-auto pr-1">
+                {% for log in task.history %}
+                <div class="relative">
+                    <!-- Dot anchor -->
+                    <span class="absolute -left-[20.5px] top-1.5 h-2 w-2 rounded-full border-2 border-slate-300 bg-white" aria-hidden="true"></span>
+                    <div class="flex flex-col space-y-0.5">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-semibold text-slate-800">{{ log.action }}</span>
+                            <span class="text-[10px] text-slate-400 font-mono">{{ log.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 italic font-medium">Выполнил: {{ log.user.full_name if log.user else 'Система' }}</span>
+                        {% if log.details %}
+                        <p class="text-[11px] text-slate-500 font-normal leading-relaxed">{{ log.details }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-xs text-slate-400 py-2 italic text-center -ml-4">Истории изменений пока нет.</p>
+                {% endfor %}
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Hidden native delete form -->
+    <form id="delete-task-form-{{ task.id }}" action="/tasks/{{ task.id }}/delete" method="POST" class="hidden"></form>
+</div>
+
+<script>
+    function toggleSubStageSelect(status) {
+        const container = document.getElementById("sub-stage-container");
+        if (status === "in_progress") {
+            container.classList.remove("hidden");
+        } else {
+            container.classList.add("hidden");
+        }
+    }
+</script>

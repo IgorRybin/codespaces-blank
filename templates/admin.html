@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ru" class="h-full bg-slate-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Панель управления — Kanban Team Board</title>
+    <!-- Tailwind CSS Standard Playback -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+    <script>
+        // 1. Extract and persist token from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        let token = urlParams.get('token');
+        if (token) {
+            localStorage.setItem('kanban_token', token);
+        } else {
+            token = localStorage.getItem('kanban_token');
+        }
+
+        // 2. If no token found anywhere and we are not logging out, redirect to login
+        if (!token && !window.location.pathname.startsWith('/auth/')) {
+            window.location.href = "/auth/login?next=" + encodeURIComponent(window.location.pathname + window.location.search);
+        }
+
+        // 3. Keep token on all local links during user interactions
+        document.addEventListener('click', function(e) {
+            const anchor = e.target.closest('a');
+            if (anchor) {
+                const href = anchor.getAttribute('href');
+                if (href && href.startsWith('/') && !href.startsWith('/auth/logout')) {
+                    const localToken = localStorage.getItem('kanban_token');
+                    if (localToken) {
+                        e.preventDefault();
+                        const url = new URL(href, window.location.origin);
+                        url.searchParams.set('token', localToken);
+                        window.location.href = url.pathname + url.search + url.hash;
+                    }
+                }
+            }
+        });
+
+        // 4. Inject token to all local forms on submission
+        document.addEventListener('submit', function(e) {
+            const form = e.target;
+            const action = form.getAttribute('action') || window.location.pathname;
+            if (action && action.startsWith('/') && !action.startsWith('/auth/login') && !action.startsWith('/auth/logout')) {
+                const localToken = localStorage.getItem('kanban_token');
+                if (localToken) {
+                    const url = new URL(action, window.location.origin);
+                    url.searchParams.set('token', localToken);
+                    form.setAttribute('action', url.pathname + url.search + url.hash);
+                }
+            }
+        });
+
+        // 5. Intercept window.fetch to automatically include the token query parameter
+        (function() {
+            const originalFetch = window.fetch;
+            window.fetch = function(input, init) {
+                let url = typeof input === 'string' ? input : (input && input.url);
+                if (url && url.startsWith('/') && !url.startsWith('/auth/')) {
+                    const localToken = localStorage.getItem('kanban_token');
+                    if (localToken) {
+                        const connector = url.includes('?') ? '&' : '?';
+                        url = url + connector + 'token=' + encodeURIComponent(localToken);
+                        if (typeof input === 'string') {
+                            input = url;
+                        } else if (input && typeof input === 'object') {
+                            input = new Request(url, input);
+                        }
+                    }
+                }
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
+</head>
+<body class="min-h-screen text-slate-850 bg-slate-50 flex flex-col">
+
+    <!-- Header Navigation -->
+    <header class="bg-white border-b border-slate-200 shadow-3xs sticky top-0 z-10 shrink-0">
+        <div class="mx-auto px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <a href="/" class="h-9 w-9 flex items-center justify-center rounded-lg bg-indigo-50 border border-indigo-150 text-indigo-600 hover:bg-indigo-100 transition-all cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                    </svg>
+                </a>
+                <div>
+                    <h1 class="text-lg font-bold text-slate-950">Панель управления</h1>
+                    <p class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider leading-none">Администрирование команды и разделов</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <div class="text-xs text-slate-500 font-medium">Администратор: <strong>{{ current_user.full_name }}</strong></div>
+                <div class="h-5 w-5 rounded-full bg-{{ current_user.color }}-600 border border-white text-white font-bold text-[8px] flex items-center justify-center">
+                    {{ current_user.full_name[:2] }}
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Area -->
+    <main class="flex-1 max-w-6xl w-full mx-auto px-6 py-8 space-y-10">
+        
+        <!-- Flash Alert system -->
+        {% if message %}
+        <div class="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 text-sm font-semibold animate-fade-in flex items-center gap-2">
+            <svg class="h-5 w-5 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+            </svg>
+            {{ message }}
+        </div>
+        {% endif %}
+        
+        {% if error %}
+        <div class="rounded-xl bg-rose-50 border border-rose-200 p-4 text-rose-800 text-sm font-semibold animate-fade-in flex items-center gap-2">
+            <svg class="h-5 w-5 text-rose-500" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-4a1 1 0 112 0 1 1 0 01-2 0zm1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+            </svg>
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <!-- Grid Split Block -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Left & Center Side (Users + Sub-stages) -->
+            <div class="lg:col-span-2 space-y-10">
+                
+                <!-- Section 1: Sub Stages editing inside 'В работе' -->
+                <div class="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-2xs space-y-6">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                        <div>
+                            <h2 class="text-md font-bold text-slate-900">Этапы работы (Колонки «В работе»)</h2>
+                            <p class="text-xs text-slate-400">Настройка подэтапов для детального отслеживания задач в активной работе.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Sub-stages list -->
+                    <div class="space-y-4">
+                        {% if sub_stages %}
+                            <div class="space-y-3">
+                            {% for stage in sub_stages %}
+                                <div class="bg-slate-50 border border-slate-200/60 p-4 rounded-xl shadow-3xs hover:shadow-2xs transition-all">
+                                    <form action="/admin/sub-stages/{{ stage.id }}/edit" method="POST" class="grid grid-cols-1 sm:grid-cols-4 items-end gap-3.5">
+                                        
+                                        <!-- Title -->
+                                        <div class="sm:col-span-2">
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Название этапа</label>
+                                            <input type="text" id="stage-name-input-{{ stage.id }}" name="name" required value="{{ stage.name }}"
+                                                class="w-full px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500 transition-all font-semibold">
+                                        </div>
+
+                                        <!-- Order index -->
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Порядок (Индекс)</label>
+                                            <input type="number" name="display_order" value="{{ stage.display_order }}"
+                                                class="w-full px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500 transition-all font-mono font-semibold">
+                                        </div>
+
+                                        <!-- Default Assignee -->
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Исполнитель по умолчанию</label>
+                                            <select name="default_assignee_id"
+                                                class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500 transition-all cursor-pointer">
+                                                <option value="none">Отсутствует</option>
+                                                {% for user in users %}
+                                                <option value="{{ user.id }}" {% if stage.default_assignee_id == user.id %} selected {% endif %}>{{ user.full_name }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+
+                                        <!-- Actions -->
+                                        <div class="sm:col-span-4 flex justify-end space-x-2 pt-1">
+                                            <button type="submit"
+                                                class="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition-all cursor-pointer">
+                                                Применить изменения
+                                            </button>
+                                            <button type="button" onclick="confirmDeleteSubStage({{ stage.id }})"
+                                                class="px-3.5 py-1.5 border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold rounded-lg transition-all cursor-pointer">
+                                                Удалить
+                                            </button>
+                                        </div>
+                                    </form>
+                                    
+                                    <!-- Hidden delete action form -->
+                                    <form id="delete-stage-form-{{ stage.id }}" action="/admin/sub-stages/{{ stage.id }}/delete" method="POST" class="hidden"></form>
+                                </div>
+                            {% endfor %}
+                            </div>
+                        {% else %}
+                            <p class="text-xs text-center italic text-slate-400 py-6 bg-slate-50 border border-slate-100 rounded-xl">Подэтапы в работе не созданы. Добавьте первый ниже!</p>
+                        {% endif %}
+                    </div>
+
+                    <hr class="border-t border-slate-100 mt-6 pb-2">
+
+                    <!-- Create Substage Form -->
+                    <form action="/admin/sub-stages/create" method="POST" class="space-y-4">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Добавить новый подэтап «В работе»</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Название подэтапа</label>
+                                <input type="text" name="name" required placeholder="Например: Тестирование"
+                                    class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Порядок сортировки</label>
+                                <input type="number" name="display_order" value="50"
+                                    class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Исполнитель по умолчанию</label>
+                                <select name="default_assignee_id"
+                                    class="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all cursor-pointer">
+                                    <option value="none" selected>Не назначен</option>
+                                    {% for user in users %}
+                                    <option value="{{ user.id }}">{{ user.full_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flex justify-end pt-2">
+                            <button type="submit"
+                                class="px-4.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl hover:shadow-sm shadow-indigo-100 transition-all cursor-pointer">
+                                + Создать этап
+                            </button>
+                        </div>
+                    </form>
+
+                </div>
+
+                <!-- Section 2: Manage Active Team Users -->
+                <div class="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-2xs space-y-6">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                        <div>
+                            <h2 class="text-md font-bold text-slate-900">Пользователи команды (5–6 человек)</h2>
+                            <p class="text-xs text-slate-400">Список участников проекта. Вы можете добавлять новых коллег.</p>
+                        </div>
+                    </div>
+
+                    <!-- Users list details -->
+                    <div class="space-y-3">
+                        {% for user in users %}
+                        <div class="flex items-center justify-between bg-slate-50/55 p-3.5 border border-slate-150 rounded-xl transition-all hover:bg-slate-50">
+                            <div class="flex items-center space-x-3">
+                                <span class="h-8 w-8 rounded-full bg-{{ user.color }}-600 font-bold text-white flex items-center justify-center text-xs shadow-3xs">
+                                    {{ user.full_name[:2] }}
+                                </span>
+                                <div>
+                                    <h4 class="text-sm font-semibold text-slate-900 leading-none">{{ user.full_name }}</h4>
+                                    <span class="text-[10px] text-slate-400 font-mono">Логин: @{{ user.username }}</span>
+                                </div>
+                            </div>
+
+                            <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded-md border
+                                {% if user.username == 'admin' %} bg-indigo-50 border-indigo-200 text-indigo-700
+                                {% else %} bg-slate-100 border-slate-200 text-slate-600 {% endif %}">
+                                {% if user.username == 'admin' %} Админ {% else %} Участник {% endif %}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <hr class="border-t border-slate-100 mt-6 pb-2">
+
+                    <!-- User creation form -->
+                    <form action="/admin/users/create" method="POST" class="space-y-4">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Создать учетную запись</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Имя пользователя (Логин)</label>
+                                <input type="text" name="username" required placeholder="Например: sergey"
+                                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">ФИО сотрудника (Полное имя)</label>
+                                <input type="text" name="full_name" required placeholder="Например: Сергей Кузнецов (Frontend разработчик)"
+                                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Пароль</label>
+                                <input type="password" name="password" required placeholder="••••••••"
+                                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 mb-1">Аватар (Цвет значка)</label>
+                                <select name="color"
+                                    class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 transition-all cursor-pointer">
+                                    <option value="blue" selected>Синий</option>
+                                    <option value="indigo">Фиолетовый</option>
+                                    <option value="emerald">Изумрудный</option>
+                                    <option value="rose">Розовый</option>
+                                    <option value="violet">Фиолетовый (ярко)</option>
+                                    <option value="amber">Янтарный</option>
+                                    <option value="orange">Оранжевый</option>
+                                    <option value="sky">Небесный</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flex justify-end pt-2">
+                            <button type="submit"
+                                class="px-4.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl hover:shadow-sm shadow-indigo-100 transition-all cursor-pointer">
+                                + Создать пользователя
+                            </button>
+                        </div>
+                    </form>
+
+                </div>
+
+            </div>
+
+            <!-- Right Column: Database Backup Dashboard -->
+            <div class="space-y-10">
+                
+                <div class="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-2xs space-y-6">
+                    <div>
+                        <h2 class="text-md font-bold text-slate-900">Резервное копирование SQLite</h2>
+                        <span class="text-[9px] font-bold px-2.5 py-0.5 rounded-md border bg-slate-50 text-emerald-700 border-emerald-250 uppercase tracking-widest mt-1 inline-block">АВТОМАТИЧЕСКИЙ РЕЖИМ</span>
+                    </div>
+
+                    <div class="space-y-3.5 bg-slate-50 p-4 border border-slate-100 rounded-xl text-xs text-slate-605">
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-550 font-medium">Бекапы включены:</span>
+                            <span class="font-bold text-emerald-700">ДА (true в config)</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-550 font-medium font-mono">Папка хранения:</span>
+                            <span class="font-bold font-mono text-slate-800">backups/</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-550 font-medium">Периодичность проверки:</span>
+                            <span class="font-bold text-slate-800">Ежедневно (daily)</span>
+                        </div>
+                    </div>
+
+                    <!-- Force Backup button trigger -->
+                    <form action="/admin/backup/create" method="POST">
+                        <button type="submit"
+                            class="w-full flex justify-center py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition-all shadow-sm cursor-pointer">
+                            Создать резервную копию базы данных сейчас
+                        </button>
+                    </form>
+
+                    <hr class="border-t border-slate-100">
+
+                    <!-- Existing Backups list -->
+                    <div class="space-y-3.5">
+                        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Доступные резервные копии ({{ backups|length }})</h3>
+                        
+                        <div class="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                            {% if backups %}
+                                {% for backup in backups %}
+                                <div class="p-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-150 rounded-xl text-xs flex items-center justify-between">
+                                    <div class="space-y-0.5 truncate pr-2">
+                                        <div class="font-mono font-bold text-slate-800 truncate" title="{{ backup.filename }}">{{ backup.filename }}</div>
+                                        <div class="text-[10px] text-slate-400 font-medium">{{ backup.modified }} • {{ backup.size_kb }} KB</div>
+                                    </div>
+                                    <a href="/admin/backup/download/{{ backup.filename }}"
+                                        class="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 text-indigo-700 font-semibold rounded-lg text-[10px] whitespace-nowrap transition-all cursor-pointer">
+                                        Скачать
+                                    </a>
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <p class="text-[11px] text-center italic text-slate-400 py-4">Архивные копии отсутствуют.</p>
+                            {% endif %}
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </main>
+
+    <footer class="mt-auto border-t border-slate-250 py-4 text-center shrink-0">
+        <p class="text-[10px] text-slate-400 font-medium">Kanban Team Board • 2026. Разработано на базе Python FastAPI & SQLite ORM для офисных ПК.</p>
+    </footer>
+
+    <script>
+        function confirmDeleteSubStage(id) {
+            const nameInput = document.getElementById(`stage-name-input-${id}`);
+            const name = nameInput ? nameInput.value : '';
+            if (confirm(`Вы действительно хотите удалить подэтап "${name}"? Все задачи из этого этапа автоматически переместятся в колонку "Новая".`)) {
+                fetch(`/admin/sub-stages/${id}/delete`, {
+                    method: 'POST'
+                })
+                .then(res => {
+                    if (res.url) {
+                        window.location.href = res.url;
+                    } else {
+                        const localToken = localStorage.getItem('kanban_token');
+                        let nextUrl = '/admin';
+                        if (localToken) {
+                            nextUrl += '?token=' + encodeURIComponent(localToken);
+                        }
+                        window.location.href = nextUrl;
+                    }
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('Произошла ошибка при удалении подэтапа');
+                });
+            }
+        }
+    </script>
+</body>
+</html>

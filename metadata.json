@@ -1,0 +1,6 @@
+{
+  "name": "Kanban Board",
+  "description": "A collaborative, local-first Kanban Board for small teams featuring custom columns, sub-stages, comments, history log, automatic SQLite backups, and Excel exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

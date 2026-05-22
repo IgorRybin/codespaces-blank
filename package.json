@@ -1,0 +1,14 @@
+{
+  "name": "kanban-board",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node start.js",
+    "build": "echo 'No frontend build step required (Jinja2 templates are rendered on the server)'",
+    "start": "node start.js",
+    "preview": "node start.js",
+    "clean": "rm -rf backups exports database.db",
+    "lint": "echo 'Skipping TS lint since this project uses Python backend with Jinja2 templates'"
+  }
+}
