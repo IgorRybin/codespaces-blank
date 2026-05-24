@@ -19,17 +19,23 @@ def get_redirect_with_token(request: Request, url: str = "/") -> RedirectRespons
         return RedirectResponse(url=f"{url}{connector}token={token}", status_code=303)
     return RedirectResponse(url=url, status_code=303)
 
+
+def require_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    if current_user.username != "admin":
+        raise HTTPException(status_code=403, detail="Требуются права администратора")
+    return current_user
+
+
 @router.get("", response_class=HTMLResponse)
 def get_admin_dashboard(
     request: Request,
     message: str = None,
     error: str = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        return RedirectResponse(url="/auth/login", status_code=303)
-        
     users = db.query(User).all()
     sub_stages = db.query(SubStage).order_by(SubStage.display_order.asc()).all()
     backups = list_backups()
@@ -54,11 +60,8 @@ def admin_create_user(
     full_name: str = Form(...),
     color: str = Form("blue"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Не авторизован")
-        
     username_cleaned = username.strip().lower()
     if not username_cleaned or not password.strip() or not full_name.strip():
         return get_redirect_with_token(request, "/admin?error=Все поля обязательны для заполнения")
@@ -82,6 +85,46 @@ def admin_create_user(
     return get_redirect_with_token(request, "/admin?message=Пользователь успешно создан!")
 
 
+@router.post("/users/{id}/password")
+def admin_change_user_password(
+    id: int,
+    request: Request,
+    password: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user)
+):
+    # Accept missing form field gracefully and redirect with an error
+    if not password or not str(password).strip():
+        return get_redirect_with_token(request, "/admin?error=Пароль не может быть пустым")
+
+    user = db.query(User).filter(User.id == id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    user.password_hash = hash_password(password.strip())
+    db.commit()
+    return get_redirect_with_token(request, "/admin?message=Пароль пользователя обновлён")
+
+
+@router.post("/users/{id}/delete")
+def admin_delete_user(
+    id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user)
+):
+    user = db.query(User).filter(User.id == id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if user.username == "admin":
+        return get_redirect_with_token(request, "/admin?error=Нельзя удалить администратора")
+
+    db.delete(user)
+    db.commit()
+    return get_redirect_with_token(request, "/admin?message=Пользователь успешно удалён")
+
+
 @router.post("/sub-stages/create")
 def admin_create_sub_stage(
     request: Request,
@@ -89,11 +132,8 @@ def admin_create_sub_stage(
     display_order: int = Form(0),
     default_assignee_id: str = Form(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Не авторизован")
-        
     name = name.strip()
     if not name:
         return get_redirect_with_token(request, "/admin?error=Название этапа не может быть пустым")
@@ -121,11 +161,8 @@ def admin_edit_sub_stage(
     display_order: int = Form(0),
     default_assignee_id: str = Form(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Не авторизован")
-        
     stage = db.query(SubStage).filter(SubStage.id == id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Этап не найден")
@@ -151,11 +188,8 @@ def admin_delete_sub_stage(
     id: int,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Не авторизован")
-        
     stage = db.query(SubStage).filter(SubStage.id == id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Этап не найден")
@@ -172,11 +206,8 @@ def admin_delete_sub_stage(
 def trigger_admin_backup(
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Не авторизован")
-        
     try:
         path = create_backup("database.db")
         return get_redirect_with_token(request, f"/admin?message=Резервная копия успешно создана в: {os.path.basename(path)}")
@@ -188,11 +219,8 @@ def trigger_admin_backup(
 def download_backup_file(
     filename: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin_user)
 ):
-    if not current_user:
-        return RedirectResponse(url="/auth/login")
-        
     # Security prevent directory traversal
     safe_filename = os.path.basename(filename)
     filepath = os.path.join("backups", safe_filename)
