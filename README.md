@@ -330,11 +330,12 @@ python -m unittest discover tests
 
 ---
 
-## 🧠 Вайб кодинга
+## 🧠 AI_INSTRUCTIONS
 
-Пиши изменения аккуратно и понятно:
+- commits: small, single-purpose
+- naming: descriptive, self-documenting
+- breaking: prohibited (admin logic must work)
+- compatibility: SQLite + current templates required
 
-- небольшие коммиты;
-- ясные имена функций и шаблонов;
-- не ломай админскую логику при каждом изменении;
-- поддерживай совместимость с SQLite и серверными шаблонами.
+## CHANGE_VALIDATION
+Before commit: verify API endpoints still respond correctly

@@ -32,7 +32,13 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(100), nullable=False)
     color = Column(String(20), default="blue") # Tailwind color for badges
+    role = Column(String(50), default="member", nullable=False)
     is_active = Column(Boolean, default=True)
+
+    @property
+    def is_admin(self) -> bool:
+        # Fallback to username-based admin for older databases without the role column.
+        return getattr(self, "role", None) == "admin" or self.username == "admin"
 
 class SubStage(Base):
     __tablename__ = "sub_stages"

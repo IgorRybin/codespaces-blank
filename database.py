@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import Config
 
@@ -17,3 +17,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_user_role_column():
+    """Ensure the users table has a role column for backward compatibility."""
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    with engine.connect() as conn:
+        result = conn.execute(text("PRAGMA table_info(users)"))
+        existing_columns = [row[1] for row in result.fetchall()]
+        if "role" not in existing_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'member'"))
+            conn.commit()

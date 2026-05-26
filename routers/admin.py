@@ -23,7 +23,7 @@ def get_redirect_with_token(request: Request, url: str = "/") -> RedirectRespons
 def require_admin_user(current_user: User = Depends(get_current_user)) -> User:
     if not current_user:
         raise HTTPException(status_code=401, detail="Не авторизован")
-    if current_user.username != "admin":
+    if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Требуются права администратора")
     return current_user
 
@@ -58,31 +58,67 @@ def admin_create_user(
     username: str = Form(...),
     password: str = Form(...),
     full_name: str = Form(...),
+    role: str = Form("member"),
     color: str = Form("blue"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin_user)
 ):
     username_cleaned = username.strip().lower()
+    role_cleaned = role.strip().lower()
     if not username_cleaned or not password.strip() or not full_name.strip():
         return get_redirect_with_token(request, "/admin?error=Все поля обязательны для заполнения")
         
-    # Check if username exists
+    if role_cleaned not in ("admin", "member"):
+        role_cleaned = "member"
+
     existing = db.query(User).filter(User.username == username_cleaned).first()
     if existing:
         return get_redirect_with_token(request, "/admin?error=Пользователь с таким логином уже существует")
         
-    # Create user
     new_user = User(
         username=username_cleaned,
         password_hash=hash_password(password.strip()),
         full_name=full_name.strip(),
         color=color,
+        role=role_cleaned,
         is_active=True
     )
     db.add(new_user)
     db.commit()
     
     return get_redirect_with_token(request, "/admin?message=Пользователь успешно создан!")
+
+
+@router.post("/users/{id}/update")
+def admin_update_user(
+    id: int,
+    request: Request,
+    full_name: str = Form(...),
+    role: str = Form("member"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_user)
+):
+    full_name_cleaned = full_name.strip()
+    role_cleaned = role.strip().lower()
+
+    if not full_name_cleaned:
+        return get_redirect_with_token(request, "/admin?error=Полное имя не может быть пустым")
+
+    if role_cleaned not in ("admin", "member"):
+        role_cleaned = "member"
+
+    user = db.query(User).filter(User.id == id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if user.username == "admin" and role_cleaned != "admin":
+        return get_redirect_with_token(request, "/admin?error=Роль администратора нельзя снять у учетной записи admin")
+
+    user.full_name = full_name_cleaned
+    user.role = role_cleaned
+    db.commit()
+
+    return get_redirect_with_token(request, "/admin?message=Профиль пользователя обновлён")
 
 
 @router.post("/users/{id}/password")

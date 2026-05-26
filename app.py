@@ -5,12 +5,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from database import engine, Base, SessionLocal
+from database import engine, Base, SessionLocal, ensure_user_role_column
 from config import Config
 from models import User, SubStage, hash_password
 from routers import auth, board, tasks, admin
 
-# Auto create database tables
+# Auto create database tables and ensure role schema exists for older databases
+ensure_user_role_column()
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -47,6 +48,7 @@ def seed_database():
                     password_hash=hashed_pw,
                     full_name=u_data["full_name"],
                     color=u_data["color"],
+                    role="admin" if u_data["username"] == "admin" else "member",
                     is_active=True
                 )
                 db.add(user)
